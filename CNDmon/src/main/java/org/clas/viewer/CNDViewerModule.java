@@ -10,6 +10,7 @@ import java.awt.FlowLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
+import static java.lang.Math.sqrt;
 import java.util.List;
 import javax.swing.ButtonGroup;
 import javax.swing.JButton;
@@ -34,12 +35,12 @@ import org.jlab.clas12.detector.EventDecoder;
 import org.jlab.clas12.detector.FADCBasicFitter;
 import org.jlab.clas12.detector.IFADCFitter;
 import org.jlab.clasrec.main.DetectorEventProcessorPane;
-import org.jlab.data.func.F1D;
 import org.jlab.data.io.DataEvent;
 import org.jlab.evio.clas12.EvioDataBank;
 import org.jlab.evio.clas12.EvioDataEvent;
 import org.root.attr.ColorPalette;
 import org.root.basic.EmbeddedCanvas;
+import org.root.func.F1D;
 import org.root.histogram.H1D;
 
 /**
@@ -63,16 +64,25 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
     DetectorCollection<H1D> H_TDCdiff = new DetectorCollection<H1D>();    // TDC differences: L - R (equivalent to distance)
     DetectorCollection<H1D> H_TDCsum = new DetectorCollection<H1D>();     // TDC sums: L + R (equivalent to average time of hit
     DetectorCollection<H1D> H_TDCavdiff = new DetectorCollection<H1D>();
+    DetectorCollection<H1D> H_TDCref = new DetectorCollection<H1D>();     // the time of flight between top and bottom layers
+    DetectorCollection<H1D> H_TDCcos = new DetectorCollection<H1D>();     // the ref-corrected average time of hit in mid-layer  
     
     H1D H_TDCtrig = null;
     
-    DetectorCollection<F1D> mylandau = new DetectorCollection<F1D>();    
+    DetectorCollection<F1D> mylandauL = new DetectorCollection<F1D>();
+    DetectorCollection<F1D> mylandauR = new DetectorCollection<F1D>();
+    
+    F1D FitRef = null;
+    F1D FitCos = null;
+    
+    double fitpar_ref[] = {100.,40.,20.};
+    double fitpar_cos[] = {100.,30.,20.};
     
     int threshold = 12;  // 10 fADC value <-> ~ 5mV   Comment from Raffaella's code. Not used here!
     int ped_i1 = 2;      // range of bin numbers (on waveform) for the pedestal region
-    int ped_i2 = 35;
-    int pul_i1 = 38;     //  range of bin numbers (on waveform) for the pulse region
-    int pul_i2 = 55;
+    int ped_i2 = 38;
+    int pul_i1 = 41;     //  range of bin numbers (on waveform) for the pulse region
+    int pul_i2 = 51;
     
     int TDC_method = 2;    // Method 1 uses ch0 trigger TDC as reference time, method 2 chooses the average time from the other two layers as ref time.
     
@@ -164,6 +174,12 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
         buttonPane.add(tdcrefRb);
         tdcrefRb.setSelected(true);
         tdcrefRb.addActionListener(this);
+        
+        JRadioButton tdcresRb  = new JRadioButton("TDC res");
+        group.add(tdcresRb);
+        buttonPane.add(tdcresRb);
+        tdcresRb.setSelected(true);
+        tdcresRb.addActionListener(this);
         
         JRadioButton tdccleanRb  = new JRadioButton("TDC clean");
         group.add(tdccleanRb);
@@ -292,6 +308,13 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
                 title = titlebase + ": TDC average time diff between layers";
                 H_TDCavdiff.add(1, layer, pair, new H1D(DetectorDescriptor.getName("TDCavdiff", 1, layer, pair), title, 5000, -10000., 10000.));
                 
+                title = titlebase + ": TDC average time diff between top and bottom layers";
+                H_TDCref.add(1, layer, pair, new H1D(DetectorDescriptor.getName("TDCref", 1, layer, pair), title, 400, -200., 200.));
+                
+                title = titlebase + ": average TDC time in mid-layer minus ref time";
+                H_TDCcos.add(1, layer, pair, new H1D(DetectorDescriptor.getName("TDCcos", 1, layer, pair), title, 400, -200., 200.));
+                
+                
                 H_WAVEL.get(1, layer, pair).setFillColor(6);
                 H_WAVEL.get(1, layer, pair).setXTitle("ADC L waveform");
                 H_WAVEL.get(1, layer, pair).setYTitle("counts");
@@ -351,8 +374,17 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
                 H_ChargeR.get(1, layer, pair).setFillColor(6);
                 H_ChargeR.get(1, layer, pair).setXTitle("Integrated wave (pedestal-subtracted), R");
                 H_ChargeR.get(1, layer, pair).setYTitle("counts");
+                
+                H_TDCref.get(1, layer, pair).setFillColor(6);
+                H_TDCref.get(1, layer, pair).setXTitle("TDC time diff between top and bottom layers");
+                H_TDCref.get(1, layer, pair).setYTitle("counts");
+                
+                H_TDCcos.get(1, layer, pair).setFillColor(6);
+                H_TDCcos.get(1, layer, pair).setXTitle("Average TDC time in mid layer minus ref");
+                H_TDCcos.get(1, layer, pair).setYTitle("counts");
     
-                mylandau.add(1, layer, pair, new F1D("landau", 0.0, 80.0));
+                mylandauL.add(1, layer, pair, new F1D("landau", 0.0, 200.0));
+                mylandauR.add(1, layer, pair, new F1D("landau", 0.0, 200.0));
                 
             }
         }
@@ -361,6 +393,9 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
        H_TDCtrig.setFillColor(6);
        H_TDCtrig.setXTitle("TDC trig ref");
        H_TDCtrig.setYTitle("counts");
+       
+       FitRef = new F1D("gaus", 0., 60.);
+       FitCos = new F1D("gaus", -10., 40.);
         
     }
     
@@ -655,6 +690,15 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
             H_TDCsum.get(1, 0, 1).fill(TDCclean[0] + TDCclean[1]);
             H_TDCsum.get(1, 0, 2).fill(TDCclean[2] + TDCclean[3]);
             H_TDCsum.get(1, 0, 3).fill(TDCclean[4] + TDCclean[5]);
+            
+            H_TDCref.get(1, 0, 1).fill((TDCgood[0] + TDCgood[1] - TDCgood[4] - TDCgood[5])/2.);
+            H_TDCref.get(1, 0, 2).fill((TDCgood[0] + TDCgood[1] - TDCgood[4] - TDCgood[5])/2.); // the ref time is for block
+            H_TDCref.get(1, 0, 3).fill((TDCgood[0] + TDCgood[1] - TDCgood[4] - TDCgood[5])/2.); // so set to be the same
+            
+            H_TDCcos.get(1, 0, 1).fill((TDCgood[0] + TDCgood[1] + TDCgood[4] + TDCgood[5])/4. - (TDCgood[2]+TDCgood[3])/2.);
+            H_TDCcos.get(1, 0, 2).fill((TDCgood[0] + TDCgood[1] + TDCgood[4] + TDCgood[5])/4. - (TDCgood[2]+TDCgood[3])/2.);  // this is also for whole block
+            H_TDCcos.get(1, 0, 3).fill((TDCgood[0] + TDCgood[1] + TDCgood[4] + TDCgood[5])/4. - (TDCgood[2]+TDCgood[3])/2.);  // so copied for all three layers
+            
         }
          
         
@@ -771,6 +815,8 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
             this.canvas.setAxisTitleFontSize(14);
             this.canvas.setStatBoxFontSize(8);
             this.canvas.draw(H_ChargeL.get(1, keySelectlayer, keySelect),"S");
+            H_ChargeL.get(1, keySelectlayer, keySelect).fit(mylandauL.get(1, keySelectlayer, keySelect));
+            this.canvas.draw(mylandauL.get(1, keySelectlayer, keySelect),"sameS");
             this.canvas.cd(1);
             this.canvas.setGridX(false);
             this.canvas.setGridY(false);
@@ -779,6 +825,8 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
             this.canvas.setAxisTitleFontSize(14);
             this.canvas.setStatBoxFontSize(8);
             this.canvas.draw(H_ChargeR.get(1, keySelectlayer, keySelect),"S");
+            H_ChargeR.get(1, keySelectlayer, keySelect).fit(mylandauR.get(1, keySelectlayer, keySelect));
+            this.canvas.draw(mylandauR.get(1, keySelectlayer, keySelect),"sameS");
         }
         else if (plotSelect == 3) {   
             this.canvas.divide(1, 2);
@@ -868,6 +916,40 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
             this.canvas.setStatBoxFontSize(8);
             this.canvas.draw(H_TDCavdiff.get(1, keySelectlayer, keySelect),"S");
         }
+        else if (plotSelect == 8) {
+            this.canvas.divide(1, 2);
+            this.canvas.cd(0);
+            this.canvas.setGridX(false);
+            this.canvas.setGridY(false);
+            this.canvas.setAxisFontSize(10);
+            this.canvas.setTitleFontSize(16);
+            this.canvas.setAxisTitleFontSize(14);
+            this.canvas.setStatBoxFontSize(8);
+            this.canvas.draw(H_TDCref.get(1, keySelectlayer, keySelect),"S");
+            fitpar_ref[0] = H_TDCref.get(1, keySelectlayer, keySelect).getBinContent(H_TDCref.get(1, keySelectlayer, keySelect).getMaximumBin());
+            FitRef.setParameters(fitpar_ref);
+            H_TDCref.get(1, keySelectlayer, keySelect).fit(FitRef, "RE");
+            this.canvas.draw(FitRef,"sameS");
+            this.canvas.cd(1);
+            this.canvas.setGridX(false);
+            this.canvas.setGridY(false);
+            this.canvas.setAxisFontSize(10);
+            this.canvas.setTitleFontSize(16);
+            this.canvas.setAxisTitleFontSize(14);
+            this.canvas.setStatBoxFontSize(8);
+            this.canvas.draw(H_TDCcos.get(1, keySelectlayer, keySelect),"S");
+            fitpar_cos[0] = H_TDCcos.get(1, keySelectlayer, keySelect).getBinContent(H_TDCcos.get(1, keySelectlayer, keySelect).getMaximumBin());
+            FitCos.setParameters(fitpar_cos);
+            H_TDCcos.get(1, keySelectlayer, keySelect).fit(FitCos, "RE");
+            this.canvas.draw(FitCos,"sameS");
+            double sigma_cos = this.FitCos.getParameter(2);
+            double sigma_ref = this.FitRef.getParameter(2);
+            double res_tof = sqrt(sigma_cos*sigma_cos*25.*25. - (sigma_ref*25./2.)*(sigma_ref*25./2.));
+            System.out.println("cosmic sigma (TDC) " +sigma_cos);
+            System.out.println("ref sigma (TDC) " + sigma_ref);
+            System.out.println("tof res (ps) " + res_tof);
+
+        }
         
     }
     
@@ -938,6 +1020,8 @@ public class CNDViewerModule implements IDetectorProcessor, IDetectorListener, I
             plotSelect = 6;
         } else if (e.getActionCommand().compareTo("TDC ref") == 0) {
             plotSelect = 7;
+        } else if (e.getActionCommand().compareTo("TDC res") == 0) {
+            plotSelect = 8;
         }
     }
     
